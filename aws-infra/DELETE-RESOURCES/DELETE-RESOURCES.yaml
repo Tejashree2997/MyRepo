@@ -1,0 +1,130 @@
+trigger:
+- master
+
+variables:
+- group: RESOURCE-DELETION-DETAILS
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- checkout: self
+
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.x'
+    addToPath: true
+
+- script: |
+    pip install awscli
+  displayName: 'Install AWS CLI'
+
+- script: |
+    aws configure set aws_access_key_id $(AWS_ACCESS_KEY_ID)
+    aws configure set aws_secret_access_key $(AWS_SECRET_ACCESS_KEY)
+    aws configure set region $(REGION)
+  displayName: 'Configure AWS CLI'
+
+- script: |
+    #!/bin/bash
+
+    # Input: Comma-separated list of instance names
+    INSTANCE_NAMES=$(echo $(INSTANCE_NAME) | tr "," "\n")
+
+    # Iterate over each instance name
+    for INSTANCE_NAME in $INSTANCE_NAMES; do
+        echo "Processing instance: $INSTANCE_NAME"
+        
+        INSTANCE_IDS=$(aws ec2 describe-instances --region $REGION --filters "Name=tag:Name,Values=$INSTANCE_NAME" --query "Reservations[*].Instances[*].InstanceId" --output text)
+        
+        for INSTANCE_ID in $INSTANCE_IDS; do
+            echo "Deleting instance: $INSTANCE_ID"
+            
+            # Check and disassociate Elastic IP if it exists
+            ALLOCATION_ID=$(aws ec2 describe-addresses --region $REGION --filters "Name=instance-id,Values=$INSTANCE_ID" --query "Addresses[*].AllocationId" --output text)
+            if [ ! -z "$ALLOCATION_ID" ]; then
+                echo "Disassociating and releasing Elastic IP: $ALLOCATION_ID"
+                ASSOCIATION_ID=$(aws ec2 describe-addresses --region $REGION --filters "Name=instance-id,Values=$INSTANCE_ID" --query "Addresses[*].AssociationId" --output text)
+                aws ec2 disassociate-address --region $REGION --association-id $ASSOCIATION_ID
+                aws ec2 release-address --region $REGION --allocation-id $ALLOCATION_ID
+                echo "Released Elastic IP: $ALLOCATION_ID"
+            else
+                echo "No Elastic IP associated with instance: $INSTANCE_ID"
+            fi
+
+            # Get volumes and security groups before instance termination
+            VOLUME_IDS=$(aws ec2 describe-volumes --region $REGION --filters "Name=attachment.instance-id,Values=$INSTANCE_ID" --query "Volumes[*].VolumeId" --output text)
+            SECURITY_GROUP_IDS=$(aws ec2 describe-instances --region $REGION --instance-ids $INSTANCE_ID --query "Reservations[*].Instances[*].SecurityGroups[*].GroupId" --output text)
+            ELB_NAMES=$(aws elb describe-load-balancers --region $REGION --query "LoadBalancerDescriptions[?Instances[?InstanceId==\`$INSTANCE_ID\`]].LoadBalancerName" --output text)
+            # Terminate instance
+            aws ec2 terminate-instances --region $REGION --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-terminated --region $REGION --instance-ids $INSTANCE_ID
+            echo "Terminated instance: $INSTANCE_ID"
+            
+            # Check if the instance is terminated
+            INSTANCE_STATE=$(aws ec2 describe-instances --region $REGION --instance-ids $INSTANCE_ID --query "Reservations[*].Instances[*].State.Name" --output text)
+            if [ "$INSTANCE_STATE" == "terminated" ]; then
+                echo "Instance $INSTANCE_ID is terminated. Proceeding with resource deletion."
+                
+                # Delete volumes
+                for VOLUME_ID in $VOLUME_IDS; do
+                    echo "Deleting volume: $VOLUME_ID"
+                    aws ec2 delete-volume --region $REGION --volume-id $VOLUME_ID
+                    echo "Deleted volume: $VOLUME_ID"
+                done
+                
+                # Delete key pair
+                # KEY_NAME=$(aws ec2 describe-instances --region $REGION --instance-ids $INSTANCE_ID --query "Reservations[*].Instances[*].KeyName" --output text)
+                # if [ ! -z "$KEY_NAME" ]; then
+                  #   echo "Deleting key pair: $KEY_NAME"
+                   # aws ec2 delete-key-pair --region $REGION --key-name $KEY_NAME
+                   # echo "Deleted key pair: $KEY_NAME"
+                    # Delete key from Key-vault
+                   # az keyvault secret delete --vault-name $(keyVaultName) --name $INSTANCE_NAME
+                    # Wait for the key to be deleted
+                   # sleep 10
+                    # Purge the deleted key from Key Vault
+                   # az keyvault key list-deleted --vault-name $(keyVaultName)
+                   # az keyvault secret purge --vault-name $(keyVaultName) --name $INSTANCE_NAME
+                # fi
+                
+                # Delete load balancers
+                # ELB_NAMES=$(aws elb describe-load-balancers --region $REGION --query "LoadBalancerDescriptions[?Instances[?InstanceId==\`$INSTANCE_ID\`]].LoadBalancerName" --output text)
+                echo "Deleting LB: $ELB_NAMES"
+                for ELB_NAME in $ELB_NAMES; do
+                    echo "Deleting load balancer: $ELB_NAME"
+                    aws elb delete-load-balancer --region $REGION --load-balancer-name $ELB_NAME
+                    echo "Deleted load balancer: $ELB_NAME"
+                done
+                
+                # Delete security groups
+                sleep 120s # Ensure enough time for security groups to be detached
+                for SECURITY_GROUP_ID in $SECURITY_GROUP_IDS; do
+                    echo "Deleting security group: $SECURITY_GROUP_ID"
+                    aws ec2 delete-security-group --region $REGION --group-id $SECURITY_GROUP_ID
+                    echo "Deleted security group: $SECURITY_GROUP_ID"
+                done
+            else
+                echo "Instance $INSTANCE_ID is not terminated. Skipping resource deletion."
+            fi
+        done
+    done
+  displayName: 'Delete EC2 Instances and Resources'
+
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'aws-keyvault-sc'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+        echo "Deleting key pair..."
+        # Delete key from AWS key-pair
+        aws ec2 delete-key-pair --key-name $INSTANCE_NAME
+        # Delete key from Key-vault
+        az keyvault secret delete --vault-name $(keyVaultName) --name $INSTANCE_NAME
+        # Wait for the key to be deleted
+        sleep 10
+        # Purge the deleted key from Key Vault
+        az keyvault key list-deleted --vault-name $(keyVaultName)
+        az keyvault secret purge --vault-name $(keyVaultName) --name $INSTANCE_NAME
+    displayName: 'Delete Key Pair'

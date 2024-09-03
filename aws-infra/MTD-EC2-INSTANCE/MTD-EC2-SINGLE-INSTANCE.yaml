@@ -1,0 +1,60 @@
+trigger:
+- master
+
+variables:
+- group: MTD-SINGLE-INSTANCE-DETAILS
+
+jobs:
+- job: create_ec2_instance
+  pool:
+    vmImage: 'ubuntu-latest'
+
+  steps:
+  - checkout: self
+
+  - script: |
+      sudo apt-get update
+      sudo apt-get install -y awscli
+      aws --version
+    displayName: 'Install AWS CLI and Verify Version'
+
+  - script: |
+      # Set AWS credentials
+      aws configure set aws_access_key_id $(AWS_ACCESS_KEY_ID)
+      aws configure set aws_secret_access_key $(AWS_SECRET_ACCESS_KEY)
+      aws configure set default.region $(REGION)
+    displayName: 'Set AWS credentials'
+  
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: 'aws-keyvault-sc'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: MTD-EC2-INSTANCE
+      inlineScript: |
+        aws ec2 create-key-pair --key-name $INSTANCE_NAME --query 'KeyMaterial' --output text > $INSTANCE_NAME-key.pem
+        az keyvault secret set --vault-name $(keyVaultName) --name $INSTANCE_NAME --file $INSTANCE_NAME-key.pem > /dev/null
+
+  - script: |
+      echo "Creating security group..."
+      aws ec2 create-security-group --group-name $INSTANCE_NAME-sg --description "My security group" --region $(REGION)
+      echo "Authorizing ports..."
+      IFS=',' read -ra PORT_ARRAY <<< "$MTD_PORTS"
+      for port in "${PORT_ARRAY[@]}"; do
+        aws ec2 authorize-security-group-ingress --group-name $INSTANCE_NAME-sg --protocol tcp --port $port --cidr 0.0.0.0/0 --region $(REGION)
+      done
+    displayName: 'Create Security Group and authorize Ingress rule'
+    
+  - script: |
+      echo "Launching EC2 instance..."
+      chmod +x custom-ssh-port.sh
+
+      INSTANCE_IDS=$(aws ec2 run-instances --region $(REGION) --image-id $(AMI_ID) --count $(INSTANCE_COUNT) --instance-type $(INSTANCE_TYPE) --key-name $INSTANCE_NAME --security-groups $INSTANCE_NAME-sg --user-data file://custom-ssh-port.sh --block-device-mappings --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":$(DISK_SIZE)}}]' --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$(INSTANCE_NAME)},{Key=CreationDate,Value=$(CreationDate)},{Key=RequestedBy,Value=$(RequestedBy)}]" --query 'Instances[*].InstanceId' --output text)
+      for INSTANCE_ID in $INSTANCE_IDS; do
+        INSTANCE_PUBIP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].PublicIpAddress" --output text)
+        INSTANCE_PRIVIP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].PrivateIpAddress" --output text)
+        echo "Instance ID: $INSTANCE_ID"
+        echo "Public IP: $INSTANCE_PUBIP"
+        echo "Private IP: $INSTANCE_PRIVIP"
+      done
+    displayName: 'Launch EC2 Instance'

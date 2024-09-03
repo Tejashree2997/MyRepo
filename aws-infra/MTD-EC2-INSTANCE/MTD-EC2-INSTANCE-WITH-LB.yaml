@@ -1,0 +1,161 @@
+trigger:
+- master
+
+variables:
+- group: MTD-INSTANCE-DETAILS
+
+jobs:
+- job: create_ec2_instance
+  pool:
+    vmImage: 'ubuntu-latest'
+
+  steps:
+  - checkout: self
+
+  - script: |
+      sudo apt-get update
+      sudo apt-get install -y awscli
+      aws --version
+    displayName: 'Install AWS CLI and Verify Version'
+
+  - script: |
+      # Set AWS credentials
+      aws configure set aws_access_key_id $(AWS_ACCESS_KEY_ID)
+      aws configure set aws_secret_access_key $(AWS_SECRET_ACCESS_KEY)
+      aws configure set default.region $(REGION)
+    displayName: 'Set AWS credentials'
+  
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: 'aws-keyvault-sc'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: MTD-EC2-INSTANCE
+      inlineScript: |
+        aws ec2 create-key-pair --key-name $INSTANCE_NAME --query 'KeyMaterial' --output text > $INSTANCE_NAME-key.pem
+        az keyvault secret set --vault-name $(keyVaultName) --name $INSTANCE_NAME --file $INSTANCE_NAME-key.pem > /dev/null
+    
+  - script: |
+      echo "Creating security group..."
+      aws ec2 create-security-group --group-name $INSTANCE_NAME-sg --description "My security group" --region $(REGION)
+      echo "Authorizing ports..."
+      IFS=',' read -ra PORT_ARRAY <<< "$RELID_PORTS"
+      for port in "${PORT_ARRAY[@]}"; do
+        aws ec2 authorize-security-group-ingress --group-name $INSTANCE_NAME-sg --protocol tcp --port $port --cidr 0.0.0.0/0 --region $(REGION)
+      done
+    displayName: 'Create Security Group and authorize Ingress rule'
+
+  - script: |
+      echo "Launching EC2 instances..."
+      chmod +x custom-ssh-port.sh
+
+      # Define instance configurations using pipeline variables
+      CONFIGS=(
+        "$(INSTANCE_TYPE_1) $(INSTANCE_COUNT_1) $(AMI_ID)"
+        "$(INSTANCE_TYPE_2) $(INSTANCE_COUNT_2) $(AMI_ID)"
+      )
+
+      INSTANCE_IDS=()  # Initialize array to store instance IDs
+
+      for CONFIG in "${CONFIGS[@]}"; do
+        IFS=' ' read -r INSTANCE_TYPE INSTANCE_COUNT AMI_ID <<< "$CONFIG"
+        echo "Launching $INSTANCE_COUNT instances of type $INSTANCE_TYPE with AMI $AMI_ID"
+        NEW_INSTANCE_IDS=$(aws ec2 run-instances --region $(REGION) --image-id $AMI_ID --count $INSTANCE_COUNT --instance-type $INSTANCE_TYPE --key-name $INSTANCE_NAME --security-groups $INSTANCE_NAME-sg --user-data file://custom-ssh-port.sh --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":$(DISK_SIZE)}}]' --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$(INSTANCE_NAME)},{Key=CreationDate,Value=$(CreationDate)},{Key=RequestedBy,Value=$(RequestedBy)},{Key=Name1,Value=New-Scheduler}]" --query 'Instances[*].InstanceId' --output text)
+        
+        # Append new instance IDs to INSTANCE_IDS array
+        INSTANCE_IDS+=($NEW_INSTANCE_IDS)
+      done
+      
+      # Output instance IDs to file for later use
+      echo "${INSTANCE_IDS[@]}" > instance_ids.txt
+
+      # Output instance details for verification
+      for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
+        INSTANCE_PUBIP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].PublicIpAddress" --output text)
+        INSTANCE_PRIVIP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].PrivateIpAddress" --output text)
+        AVAILABILITY_ZONE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].Placement.AvailabilityZone" --output text)
+        echo "Instance ID: $INSTANCE_ID"
+        echo "Public IP: $INSTANCE_PUBIP"
+        echo "Private IP: $INSTANCE_PRIVIP"
+        echo "Availability Zone: $AVAILABILITY_ZONE"
+      done
+
+    displayName: 'Launch EC2 Instances with different configurations'
+
+  - script: |
+      echo "Creating classic load balancer..."
+      # Retrieve all instance IDs from instance_ids.txt
+      INSTANCE_IDS=$(cat instance_ids.txt)
+
+      if [ -z "$INSTANCE_IDS" ]; then
+        echo "No instance IDs found in instance_ids.txt. Exiting."
+        exit 1
+      fi
+
+      # Get availability zones of instances
+      AVAILABILITY_ZONES=$(aws ec2 describe-instances --instance-ids $INSTANCE_IDS --query 'Reservations[].Instances[].Placement.AvailabilityZone' --output text | tr '\t' ' ')
+
+      # Define listeners for the load balancer
+      LISTENERS="[
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 8443, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 8443},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 4443, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 4443},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 8006, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 8006},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 8007, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 8007},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 9080, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 9080},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 5671, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 5671},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 27017, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 27017},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 443, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 443},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 9443, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 9443},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 9442, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 9442},
+        {\"Protocol\": \"TCP\", \"LoadBalancerPort\": 1043, \"InstanceProtocol\": \"TCP\", \"InstancePort\": 1043}
+      ]"
+
+      # Create classic load balancer
+      aws elb create-load-balancer --load-balancer-name $INSTANCE_NAME-clb --listeners "$LISTENERS" --availability-zones $AVAILABILITY_ZONES
+
+      echo "Attempting to enable cross-zone load balancing..."
+      aws elb modify-load-balancer-attributes --load-balancer-name $INSTANCE_NAME-clb --load-balancer-attributes "{\"CrossZoneLoadBalancing\":{\"Enabled\":true}}"
+      
+      echo "Waiting for 10 seconds to allow settings to propagate..."
+      sleep 10
+
+      CROSS_ZONE_STATUS=$(aws elb describe-load-balancer-attributes --load-balancer-name $INSTANCE_NAME-clb --query "LoadBalancerAttributes.CrossZoneLoadBalancing.Enabled" --output text)
+      echo "CrossZoneLoadBalancing status: $CROSS_ZONE_STATUS"
+      if [[ "$CROSS_ZONE_STATUS" == "true" || "$CROSS_ZONE_STATUS" == "True" ]]; then
+        echo "Cross-zone load balancing is enabled."
+      else
+        echo "Failed to enable cross-zone load balancing."
+        exit 1
+      fi
+
+      echo "Classic Load Balancer $INSTANCE_NAME-clb created with instances in availability zones: $AVAILABILITY_ZONES"
+
+    displayName: 'Create Classic Load Balancer'
+  
+  - script: |
+      echo "Registering instances with load balancer..."
+      INSTANCE_IDS=$(cat instance_ids.txt)
+
+      if [ -z "$INSTANCE_IDS" ]; then
+        echo "No instance IDs found in instance_ids.txt. Exiting."
+        exit 1
+      fi
+
+      # Register instances with load balancer
+      aws elb register-instances-with-load-balancer --load-balancer-name $INSTANCE_NAME-clb --instances $INSTANCE_IDS
+
+      echo "Instances registered with Classic Load Balancer $INSTANCE_NAME-clb."
+
+    displayName: 'Register Instances with Load Balancer'
+  
+  - script: |
+      echo "Verifying cross-zone load balancing settings..."
+      CROSS_ZONE_STATUS=$(aws elb describe-load-balancer-attributes --load-balancer-name $INSTANCE_NAME-clb --query "LoadBalancerAttributes.CrossZoneLoadBalancing.Enabled" --output text)
+      echo "CrossZoneLoadBalancing status: $CROSS_ZONE_STATUS"
+      if [[ "$CROSS_ZONE_STATUS" == "true" || "$CROSS_ZONE_STATUS" == "True" ]]; then
+        echo "Cross-zone load balancing is enabled."
+      else
+        echo "Cross-zone load balancing is not enabled."
+        exit 1
+      fi
+    displayName: 'Verify Load Balancer'
