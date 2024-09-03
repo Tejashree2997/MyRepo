@@ -1,0 +1,355 @@
+AWS EC2 Infrastructure Creation using Azure DevOps Pipeline
+
+1. Introduction 
+This document provides a step-by-step guide for creating AWS EC2 infrastructure using Azure DevOps pipelines. The guide is organized into three sections, each with its own folder for creating and deleting AWS resources.
+We have separate repo named as aws-infrastructure and below is the URL to access the repo:
+https://dev.azure.com/aws-infrastructure/
+
+2. Prerequisites 
+Before beginning, ensure the following prerequisites are met:
+Permission to access Azure DevOps Organization
+User AWS credentials(Access ID and key)with IAM (Create,List and delete resource)permissions
+Azure DevOps Service Connection to AWS(One time Activity)
+Azure DevOps Service Connection to Azure(One time Activity)
+Installed Azure CLI (local machine/saas-dev)to download a ssh key from key-vault
+
+3. Service Connection Creation
+Azure Service Connection to AWS
+
+Note: Please ensure that you have installed AWS Toolkit for Azure DevOps – Amazon Web Services for you repo.
+Please refer https://marketplace.visualstudio.com/items?itemName=AmazonWebServices.aws-vsts-tools for the same.
+When you click on above URL it will take you to the page where you need to select the specific organization for which you are creating this service connection and click on Installed/Download. 
+When you installed the AWS toolkit then and only then you will get a option to create a service connection for AWS under New Service Connection.
+
+Go to the AWS-Infrastructure repo
+Go to the Project Settings
+Go to the Service connections under the Pipelines
+Click on Service connections
+Select AWS and click on Next
+Enter the Service connection name and tick the checkbox of Grant access permission to all pipelines under Security and click on Save.
+
+Azure Service Connection to Azure
+
+Go to the AWS-Infrastructure repo
+Go to the Project Settings
+Go to the Service connections under the Pipelines
+Click on New Service connections
+Select Azure Resource Manager  and click on Next
+Select Workload Identity federation (automatic) and click on Next
+Select Subscription and Resource Group where you want to save the SC
+Enter the Service connection name and tick the checkbox of Grant access permission to all pipelines under Security and click on Save.
+
+4. Folder Structure in Azure Repos (Master Branch)
+/RELID-EC2-INSTANCE
+/MTD-EC2-INSTANCE
+/DELETE-RESOURCES
+Each folder contains the necessary YAML scripts and pipeline configurations for managing AWS EC2 instances.
+
+5. Variable-Group Structure 
+We have four variable groups in the Azure DevOps Library, specifically for each folder mentioned above.
+RELID-INSTANCE-DETAILS: 
+This contains the required information in the form of variables for creating RELID instances, such as:
+AWS_ACCESS_KEY_ID: User access key id 
+AWS_SECRET_ACCESS_KEY: User secret access key
+awsServiceConnection: AWS Service connection name
+azureSubscription: Azure service connection name
+INSTANCE_NAME: Name of the instance
+Region: Region name in which the instance will be created
+AMI ID: OS image ID
+INSTANCE_COUNTt: No. of instances required
+INSTANCE_TYPE: Instance Configuration(t2.medium,t2.large etc.)
+Disk_Size: Default 30GB, can be changed as per requirement
+RELID_Ports: RELID ports to be opened
+keyVaultName: Name of the keyvault to store ssh key
+Creation Date: Date of the instance creation
+requestedBy: Name of the person who requested the instance
+Note: AMI ID changes as per the region and OS.
+MTD-INSTANCE-DETAILS: 
+This contains the required information for creating an MTD instance with multiple configuration details and MTD ports to be opened.As there are requirements for multiple instances with different configuration,there are two variables for instance-type and instance-count in this variable group.
+AWS_ACCESS_KEY_ID: User access key id 
+AWS_SECRET_ACCESS_KEY: User secret access key
+awsServiceConnection: AWS Service connection name
+azureSubscription: Azure service connection name
+INSTANCE_NAME: Name of the instance
+Region: Region name in which the instance will be created
+AMI ID: OS image ID
+INSTANCE_TYPE_1:Instance Configuration of type 1(t2.medium,t2.large etc.)
+INSTANCE_TYPE_2:Instance Configuration of type 2(t2.medium,t2.large etc.)
+INSTANCE_COUNT_1: No of instances of Type 1
+INSTANCE_COUNT_2: No of instances of Type 2
+INSTANCE_TYPE: Instance Configuration(t2.medium,t2.large etc.)
+Disk_Size: Default 30GB, can be changed as per requirement
+MTD_Ports: MTD ports to be opened
+keyVaultName: Name of the keyvault to store ssh key
+Creation Date: Date of the instance creation
+requestedBy: Name of the person who requested the instance
+
+MTD-SINGLE-INSTANCE-DETAILS: 
+This contains the required information for single MTD instance creation.If there is requirement for MTD single or multiple instances with same configuration then this variable group needs to updated with the required values.
+AWS_ACCESS_KEY_ID: User access key id 
+AWS_SECRET_ACCESS_KEY: User secret access key
+awsServiceConnection: AWS Service connection name
+azureSubscription: Azure service connection name
+INSTANCE_NAME: Name of the instance
+Region: Region name in which the instance will be created
+AMI ID: OS image ID
+INSTANCE_COUNTt: No. of instances required
+INSTANCE_TYPE: Instance Configuration(t2.medium,t2.large etc.)
+Disk_Size: Default 30GB, can be changed as per requirement
+MTD_Ports: MTD ports to be opened
+keyVaultName: Name of the keyvault to store ssh key
+Creation Date: Date of the instance creation
+requestedBy: Name of the person who requested the instance
+
+RESOURCE-DELETION-DETAILS: 
+This variable group Contains all the information required to delete the resource in the form of variables.
+AWS_ACCESS_KEY_ID: User access key id 
+AWS_SECRET_ACCESS_KEY: User secret access key
+awsServiceConnection: AWS Service connection name
+azureSubscription: Azure service connection name
+INSTANCE_NAME: Name of the instance
+Region: Region name in which the instance will be created
+keyVaultName: Name of the keyvault to store ssh key
+
+6. Pipeline Configuration
+relid-instance-creation 
+This folder contains the scripts and pipeline configuration for creating RELID instances. We have two separate pipelines for the creation of instances with the below YAML configurations. Pipelines are triggered as per requests raised by the QA team. For example, if QA raises a request for a RELID instance with a Load Balancer configured, then we will trigger the pipeline which will create a RELID EC2 instance with the Load Balancer configured and vice versa.
+Below are the resources that get created using the pipeline:
+EC2 Instances
+SSH key to access the instance
+Volume
+Security Group
+Load Balancer if requested
+	To access the SSH key from keyvault KeyVault-AWS please use the following command from saas-dev/local machine if az-cli installed:
+az keyvault secret show --name key-name --vault-name KeyVault-name --query value -o tsv >> keyname
+
+There are two YAML configurations with two different pipelines for creating EC2 resources as follows:
+RELID-EC2-INSTANCE-WITHOUT-LB.yaml: This YAML configuration creates only RELID EC2 instances.
+RELID-EC2-INSTANCE-WITH-LB.yaml: This YAML configuration creates RELID instances with LB configured.
+mtd-instance-creation 
+This folder contains the scripts and pipeline configuration for creating MTD instances. There are three YAML configurations for creating MTD instances with or without a Load Balancer. We have three separate pipelines for the creation of instances with the above YAML configurations. Pipelines are triggered as per request. For example, if QA raises a request for MTD instances with two different configurations (instance types) of EC2 instances, then we will trigger the pipeline which will create MTD EC2 instances with different configurations.
+There are two YAML configurations for creating EC2 resources as follows:
+MTD-EC2-INSTANCE-WITHOUT-LB.yaml: This YAML configuration creates multiple MTD instances with different configurations.
+MTD-EC2-INSTANCE-WITH-LB.yaml: This YAML configuration creates multiple MTD instances with LB configured.
+MTD-EC2-SINGLE-INSTANCE.yaml: This YAML configuration creates a single MTD instance.
+resource-deletion 
+This folder contains the scripts and pipeline configuration for deleting resources. This script will delete all resource instances, be it MTD or RELID. We just have to manually change the instance name to be deleted and the region of the resource in the RESOURCE-DELETION-DETAILS variable group.
+Following resources will be delete using resource deletion pipeline:
+EC2-instances
+Associated Security group
+Associated ssh key
+Associated volume
+Associated Load balancer
+Elastic IP if attached
+7. Pipelines 
+We have a total of 6 pipelines as follows:
+RELID-EC2-INSTANCE-WITHOUT-LB CREATION PIPELINE: This pipeline will create single or multiple RELID EC2 instances without LB.
+RELID-EC2-INSTANCE-WITH-LB CREATION PIPELINE: This pipeline will create single or multiple RELID EC2 instances with LB configured.
+MTD-EC2-INSTANCE-WITHOUT-LB CREATION PIPELINE: This pipeline will create multiple MTD EC2 instances without LB.
+MTD-EC2-INSTANCE-WITH-LB CREATION PIPELINE: This pipeline will create multiple MTD EC2 instances with LB configured.
+MTD-EC2-SINGLE-INSTANCE CREATION PIPELINE: This pipeline will create a single MTD EC2 instance.
+RESOURCE DELETION PIPELINE: This pipeline will delete single/multiple EC2 instances with all the associated resources.
+8. Run Pipeline
+Note: Before triggering the pipeline, ensure that the instance details related changes have been made in the respective variable group as per requirement.
+Note: AWS credentials(access ID and key) need to be changed as per the user/person who is triggering the pipeline.
+Steps to run/trigger the pipelines:
+RELID-EC2-INSTANCE-WITHOUT-LB CREATION PIPELINE:
+
+Login to Azure portal and access the Azure DevOps pipeline
+Select the AWS-Infrastructure organization and go to the project aws-infrastructure
+Go to the pipeline
+Go to the Library
+Select variable group RELID-INSTANCE-DETAILS
+Update the values of mandatory variables with the new values such as:
+AWS_ACCESS_KEY_ID: Access key ID of the User who is about to trigger the pipeline
+AWS_SECRET_ACCESS_KEY: Access key of the user who is about to trigger the pipeline
+INSTANCE_NAME: with the name to be given to the instance
+Region: In which region you wants to create an instance
+AMI ID: AMI ID of the OS
+INSTANCE_TYPE: Instance configuration ie.t2.largs etc
+INSTANCE_COUNT: No. of instances 
+CreationDate: Instance creation date
+RequestedBy: Name of the owner of the instance
+Click on Save to save the updated  values in variable group
+Go to pipelines
+Under the pipelines click on RELID-EC2-INSTANCE-WITHOUT-LB CREATION PIPELINE to create a single or multiple ec2 instances without Load Balancer
+Click on Run Pipeline
+After clicking on Run Pipeline check if the selected Branch is a Master or not if not then select Master branch and click on Run.(Note: If there is any error it will prompt for error,if there is error in yaml file then need to check the corresponding yaml file RELID-EC2-INSTANCE-WITHOUT-LB.yaml)
+After clicking on the Run,it will redirect to new page where the running job will be listed.
+Click on the create_ec2_instance to monitor the process/logs
+The pipeline contains the multiple stages/task as follows:
+Install AWS CLI and Verify Version- To install the aws cli on agent
+Set AWS credentials- to set the AWS credentials on agent
+AzureCLI - this task is use to create SSH key and save it in keyvault
+Create Security Group and authorize Ingress Rule
+Launch EC2 instance
+If any error occurred pipeline will be stop at that particular stage if not pipeline will be succussful
+After successful completion of the pipeline under the Launch EC2 instance,deatils of created instance will be listed such as Instance IDs,Public Ip and Private IP of the instances
+
+RELID-EC2-INSTANCE-WITH-LB CREATION PIPELINE:
+
+Login to Azure portal and access the Azure DevOps pipeline
+Select the AWS-Infrastructure organization and go to the project aws-infrastructure
+Go to the pipeline
+Go to the Library
+Select variable group RELID-INSTANCE-DETAILS
+Update the values of the mandatory variables such as
+AWS_ACCESS_KEY_ID: Access key ID of the User who is about to trigger the pipeline
+AWS_SECRET_ACCESS_KEY: Access key of the user who is about to trigger the pipeline
+INSTANCE_NAME: with the name to be given to the instance
+Region: In which region you wants to create an instance
+AMI ID: AMI ID of the OS
+INSTANCE_TYPE: Instance configuration ie.t2.largs etc
+INSTANCE_COUNT: No. of instances 
+CreationDate: Instance creation date
+RequestedBy: Name of the owner of the instance
+Click on Save to save the updated  values in variable group
+Go to pipelines
+Under the pipelines click on RELID-EC2-INSTANCE-WITH-LB CREATION PIPELINE to create a single or multiple ec2 instances with Load Balancer
+Click on Run Pipeline
+After clicking on Run Pipeline check if the selected Branch is a Master or not if not then select Master branch and click on Run.(Note: If there is any error it will prompt for error,if there is error in yaml file then need to check the corresponding yaml file RELID-EC2-INSTANCE-WITH-LB.yaml)
+After clicking on the Run,it will redirect to new page where the running job will be listed.
+Click on the create_ec2_instance to monitor the process/logs
+The pipeline contains the multiple stages/task as follows:
+Install AWS CLI and Verify Version- To install the aws cli on agent
+Set AWS credentials- to set the AWS credentials on agent
+AzureCLI - this task is use to create SSH key and save it in keyvault
+Create Security Group and authorize Ingress Rule
+Launch EC2 instance
+If any error occurred pipeline will be stop at that particular stage if not pipeline will be succussful
+After successful completion of the pipeline under the Launch EC2 instance,deatils of created instance will be listed such as Instance IDs,Public Ip and Private IP of the instances
+
+MTD-EC2-INSTANCE-WITHOUT-LB CREATION PIPELINE:
+
+Login to Azure portal and access the Azure DevOps pipeline
+Select the AWS-Infrastructure organization and go to the project aws-infrastructure
+Go to the pipeline
+Go to the Library
+Select variable group MTD-INSTANCE-DETAILS
+Update the values of variables such as:
+AWS_ACCESS_KEY_ID: Access key ID of the User who is about to trigger the pipeline
+AWS_SECRET_ACCESS_KEY: Access key of the user who is about to trigger the pipeline
+INSTANCE_NAME: with the name to be given to the instance
+Region: In which region you wants to create an instance
+AMI ID: AMI ID of the OS
+INSTANCE_TYPE_1: Instance configuration of type 1 ie.t2.largs etc
+INSTANCE_TYPE_2: Instance configuration of type 2
+INSTANCE_COUNT_1: No. of instances of type 1
+INSTANCE_COUNT_2: No of instances of type 2
+CreationDate: Instance creation date
+RequestedBy: Name of the owner of the instance
+Click on Save to save the updated  values in variable group
+Go to pipelines
+Under the pipelines click on MTD-EC2-INSTANCE-WITHOUT-LB CREATION PIPELINE to create multiple MTD  instances without Load Balancer
+Click on Run Pipeline
+After clicking on Run Pipeline check if the selected Branch is a Master or not if not then select Master branch and click on Run.(Note: If there is any error it will prompt for error,if there is error in yaml file then need to check the corresponding yaml file MTD-EC2-INSTANCE-WITHOUT-LB.yaml)
+After clicking on the Run,it will redirect to new page where the running job will be listed.
+Click on the create_ec2_instance to monitor the process/logs
+The pipeline contains the multiple stages/task as follows:
+Install AWS CLI and Verify Version- To install the aws cli on agent
+Set AWS credentials- to set the AWS credentials on agent
+AzureCLI - this task is use to create SSH key and save it in keyvault
+Create Security Group and authorize Ingress Rule
+Launch EC2 instance
+If any error occurred pipeline will be stop at that particular stage if not pipeline will be succussful
+After successful completion of the pipeline under the Launch EC2 instance,deatils of created instance will be listed such as Instance IDs,Public Ip and Private IP of the instances
+
+MTD-EC2-INSTANCE-WITH-LB CREATION PIPELINE:
+
+Login to Azure portal and access the Azure DevOps pipeline
+Select the AWS-Infrastructure organization and go to the project aws-infrastructure
+Go to the pipeline
+Go to the Library
+Select variable group MTD-INSTANCE-DETAILS
+Update the values of variables such as:
+AWS_ACCESS_KEY_ID: Access key ID of the User who is about to trigger the pipeline
+AWS_SECRET_ACCESS_KEY: Access key of the user who is about to trigger the pipeline
+INSTANCE_NAME: with the name to be given to the instance
+Region: In which region you wants to create an instance
+AMI ID: AMI ID of the OS
+INSTANCE_TYPE_1: Instance configuration of type 1 ie.t2.largs etc
+INSTANCE_TYPE_2: Instance configuration of type 2
+INSTANCE_COUNT_1: No. of instances of type 1
+INSTANCE_COUNT_2: No of instances of type 2
+CreationDate: Instance creation date
+RequestedBy: Name of the owner of the instance
+Click on Save to save the updated  values in variable group
+Go to pipelines
+Under the pipelines click on MTD-EC2-INSTANCE-WITH-LB CREATION PIPELINE to create multiple MTD instances without Load Balancer
+Click on Run Pipeline
+After clicking on Run Pipeline check if the selected Branch is a Master or not if not then select Master branch and click on Run.(Note: If there is any error it will prompt for error,if there is error in yaml file then need to check the corresponding yaml file MTD-EC2-INSTANCE-WITH-LB.yaml)
+After clicking on the Run,it will redirect to new page where the running job will be listed.
+Click on the create_ec2_instance to monitor the process/logs
+The pipeline contains the multiple stages/task as follows:
+Install AWS CLI and Verify Version- To install the aws cli on agent
+Set AWS credentials- to set the AWS credentials on agent
+AzureCLI - this task is use to create SSH key and save it in keyvault
+Create Security Group and authorize Ingress Rule
+Launch EC2 instance
+If any error occurred pipeline will be stop at that particular stage if not pipeline will be succussful
+After successful completion of the pipeline under the Launch EC2 instance,deatils of created instance will be listed such as Instance IDs,Public Ip and Private IP of the instances
+
+
+MTD-SINGLE-EC2-INSTANCE PIPELINE:
+
+Login to Azure portal and access the Azure DevOps pipeline
+Select the AWS-Infrastructure organization and go to the project aws-infrastructure
+Go to the pipeline
+Go to the Library
+Select variable group MTD-SINGLE-INSTANCE-DETAILS
+Update the values of variables such as:
+AWS_ACCESS_KEY_ID: Access key ID of the User who is about to trigger the pipeline
+AWS_SECRET_ACCESS_KEY: Access key of the user who is about to trigger the pipeline
+INSTANCE_NAME: with the name to be given to the instance
+Region: In which region you wants to create an instance
+AMI ID: AMI ID of the OS
+INSTANCE_TYPE: Instance configuration  ie.t2.largs etc
+INSTANCE_COUNT: No. of instances 
+CreationDate: Instance creation date
+RequestedBy: Name of the owner of the instance
+Click on Save to save the updated  values in variable group
+Go to pipelines
+Under the pipelines click on MTD-EC2-SINGLE-INSTANCE CREATION PIPELINE to create a single or multiple MTD instances with same instance configuration
+Click on Run Pipeline
+After clicking on Run Pipeline check if the selected Branch is a Master or not if not then select Master branch and click on Run.(Note: If there is any error it will prompt for error,if there is error in yaml file then need to check the corresponding yaml file MTD-SINGLE-INSTANCE.yaml)
+After clicking on the Run,it will redirect to new page where the running job will be listed.
+Click on the create_ec2_instance to monitor the process/logs
+The pipeline contains the multiple stages/task as follows:
+Install AWS CLI and Verify Version- To install the aws cli on agent
+Set AWS credentials- to set the AWS credentials on agent
+AzureCLI - this task is use to create SSH key and save it in keyvault
+Create Security Group and authorize Ingress Rule
+Launch EC2 instance
+If any error occurred pipeline will be stop at that particular stage if not pipeline will be succussful
+After successful completion of the pipeline under the Launch EC2 instance,deatils of created instance will be listed such as Instance IDs,Public Ip and Private IP of the instances
+
+RESOURCE DELETION PIPELINE:
+
+Login to Azure portal and access the Azure DevOps pipeline
+Select the AWS-Infrastructure organization and go to the project aws-infrastructure
+Go to the pipeline
+Go to the Library
+Select variable group RESOURCE-DELETION-DETAILS
+Update the values of variables such as:
+AWS_ACCESS_KEY_ID: Access key ID of the User who is about to trigger the pipeline
+AWS_SECRET_ACCESS_KEY: Access key of the user who is about to trigger the pipeline
+INSTANCE_NAME: with the name to be given to the instance
+Region: In which region you wants to create an instance
+Click on Save to save the updated  values in variable group
+Go to pipelines
+Under the pipelines click on RESOURCE DELETION PIPELINE to delete the ec2 instances with their associated resources such as SG,Key,Volume
+Click on Run Pipeline
+After clicking on Run Pipeline check if the selected Branch is a Master or not if not then select Master branch and click on Run.(Note: If there is any error it will prompt for error,if there is error in yaml file then need to check the corresponding yaml file DELETE-RESOURCES.yaml)
+After clicking on the Run,it will redirect to new page where the running job will be listed.
+Click on the Job to monitor the process/logs
+The pipeline contains the multiple stages/task as follows:
+Install AWS CLI and Verify Version- To install the aws cli on agent
+Configure AWS credentials- to set the AWS credentials on agent
+Delete ec2 instance and resources - to delete instance with resources
+AzureCLI - this task is use to delete SSH key and save it in keyvault
+If any error occurred pipeline will be stop at that particular stage if not pipeline will be succussful
+After successful completion of the pipeline all the resources will be deleted from the AWS portal and key will be deleted from Azure key vault
+
+9. Conclusion 
+By following the above steps, you can efficiently create and manage AWS EC2 infrastructure using Azure DevOps pipelines. Each folder (relid-instance-creation, mtd-instance-creation, and resource-deletion) has its own pipeline, ensuring modular and organized infrastructure management.
+
