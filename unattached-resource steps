@@ -1,0 +1,40 @@
+1. Introduction
+  This document provides a step-by-step guide for retrieving unattached resources on Azure Cloud using a Python script.
+  The code will be pushed into a Git Repository
+2. Prerequisites
+  Before beginning, ensure the following prerequisites are met:
+  1.Azure credentials such as the tenant ID, subscription ID, service principal ID, and key were provided by Amit sir.
+  2.Python is Installed on your machine.
+  3.Required Azure Python SDKs installed on your machine:
+      3.1 ClientSecretCredential
+      3.2 ResourceManagementClient
+      3.3. ComputeManagementClient
+      3.4 NetworkManagementClient
+      3.5 ContainerRegistryManagementClient
+  Below are the URLs to download the above SDKs:s
+      1. To install azure identity SDK:
+      https://pypi.org/project/azure-identity/
+      2. To install azure management resource SDK
+      https://pypi.org/project/azure-mgmt-resource/
+      3.To install compute SDK
+       https://pypi.org/project/azure-mgmt-compute/
+      4. To install network SDK
+      https://pypi.org/project/azure-mgmt-network/
+      5. To install container registry SDK
+      https://pypi.org/project/azure-mgmt-containerregistry/
+3. Required Files
+  1. Cred_values.py:
+    This file contains all the required user credentials (Service Principal ID and Key) along with the Tenant ID and Subscription ID.
+  2. list_of_unattached_resources.py:
+    This file contains the code to retrieve unattached/unassociated resources in the Azure Dev Subscription.
+Below are the resources that will be listed using this file:
+  1. Unattached Disks
+  2. Unattached NICs
+  3. Unattached NSGs
+  4. Unattached Public IPs
+  5. Unattached Snapshots
+  6. Unattached Packer Images
+  7. Untagged ACR Images
+
+To run the script, use the following command:
+python3 list_of_unattached_resources.py
